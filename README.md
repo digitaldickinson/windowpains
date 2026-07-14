@@ -1,6 +1,6 @@
-## WindowPains — Overview
+## WindowPain — Overview
 
-WindowPains is a browser-based tool for cross-checking assessments against the mega-checking window spreadsheets. It runs entirely on your own machine, so nothing is uploaded to a server, and no student data ever leaves your computer. No GDPR issues.
+WindowPain is a browser-based tool for cross-checking assessments against the mega-checking window spreadsheets. It runs entirely on your own machine, so nothing is uploaded to a server, and no student data ever leaves your computer. No GDPR issues.
 
 It's a single HTML file, no installation: open it in a browser and go.
 
