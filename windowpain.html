@@ -400,6 +400,10 @@
       <select id="fYos"><option value="">All</option></select>
     </div>
     <div class="field wide">
+      <label for="fProgramme">Programme curriculum</label>
+      <select id="fProgramme"><option value="">All</option></select>
+    </div>
+    <div class="field wide">
       <label for="fCourse">Unit / course title</label>
       <select id="fCourse"><option value="">All</option></select>
     </div>
@@ -781,6 +785,7 @@
   var fDept = document.getElementById('fDept');
   var fYear = document.getElementById('fYear');
   var fYos = document.getElementById('fYos');
+  var fProgramme = document.getElementById('fProgramme');
   var fCourse = document.getElementById('fCourse');
   var fOutcome = document.getElementById('fOutcome');
   var fStudent = document.getElementById('fStudent');
@@ -792,11 +797,14 @@
   // today — since which titles collide can change as new data comes in.
   var courseTitleByCode = {};
 
-  function buildCourseFilter(){
+  // The unit list is scoped to the currently selected department — a department has its own set of
+  // units, so showing every other department's units too just makes the dropdown harder to search.
+  function buildCourseFilter(deptFilter){
     var seen = {};
     courseTitleByCode = {};
     allRows.forEach(function(r){
       if(!r.coursecode) return;
+      if(deptFilter && r.dept !== deptFilter) return;
       if(!seen[r.coursecode]){ seen[r.coursecode] = true; courseTitleByCode[r.coursecode] = r.coursetitle || ''; }
     });
     var codes = Object.keys(seen).sort(function(a,b){
@@ -812,6 +820,7 @@
       o.textContent = (courseTitleByCode[code] || '(no title)') + ' (' + code + ')';
       fCourse.appendChild(o);
     });
+    // if the previously selected course isn't offered in the newly selected department, fall back to "All"
     if(codes.indexOf(current) !== -1) fCourse.value = current;
   }
 
@@ -819,11 +828,16 @@
     fillSelect(fDept, uniqueSorted('dept'));
     fillSelect(fYear, uniqueSorted('ayear'));
     fillSelect(fYos, uniqueSorted('yos'));
+    fillSelect(fProgramme, uniqueSorted('programme'));
     fillSelect(fOutcome, uniqueSorted('outcome'));
-    buildCourseFilter();
+    buildCourseFilter(fDept.value);
   }
 
-  [fDept, fYear, fYos, fCourse, fOutcome].forEach(function(el){
+  fDept.addEventListener('change', function(){
+    buildCourseFilter(fDept.value);
+    applyFilters();
+  });
+  [fYear, fYos, fProgramme, fCourse, fOutcome].forEach(function(el){
     el.addEventListener('change', applyFilters);
   });
   fStudent.addEventListener('input', debounce(applyFilters, 150));
@@ -838,7 +852,8 @@
   }
 
   document.getElementById('resetBtn').addEventListener('click', function(){
-    fDept.value=''; fYear.value=''; fYos.value=''; fCourse.value=''; fOutcome.value=''; fStudent.value='';
+    fDept.value=''; fYear.value=''; fYos.value=''; fProgramme.value=''; fCourse.value=''; fOutcome.value=''; fStudent.value='';
+    buildCourseFilter(''); // dept cleared, so the unit list goes back to showing every department
     applyFilters();
   });
 
@@ -863,13 +878,14 @@
   });
 
   function applyFilters(){
-    var dept = fDept.value, year = fYear.value, yos = fYos.value, course = fCourse.value, outcome = fOutcome.value;
+    var dept = fDept.value, year = fYear.value, yos = fYos.value, programme = fProgramme.value, course = fCourse.value, outcome = fOutcome.value;
     var q = fStudent.value.trim().toLowerCase();
 
     currentRows = allRows.filter(function(r){
       if(dept && r.dept !== dept) return false;
       if(year && r.ayear !== year) return false;
       if(yos && r.yos !== yos) return false;
+      if(programme && r.programme !== programme) return false;
       if(course && r.coursecode !== course) return false;
       if(outcome && r.outcome !== outcome) return false;
       if(q){
