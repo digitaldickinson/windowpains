@@ -322,6 +322,48 @@
   @media (max-width:640px){
     tbody td, thead th{ font-size:0.72rem; padding:6px 8px; }
   }
+
+  /* --- Aggregated view: detail popup --- */
+  tr.agg-row{ cursor:pointer; }
+  tr.agg-row:hover td{ background:#f3e6de; }
+  td.conflict{ color:var(--bad); font-weight:600; cursor:help; }
+
+  #detailModal{
+    display:none;
+    position:fixed;
+    inset:0;
+    background:rgba(27,36,48,0.55);
+    z-index:100;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+  }
+  #detailModalBox{
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-top:3px solid var(--ink);
+    max-width:900px;
+    width:100%;
+    max-height:80vh;
+    display:flex;
+    flex-direction:column;
+    padding:22px 24px;
+    position:relative;
+  }
+  #modalClose{
+    position:absolute;
+    top:10px; right:14px;
+    background:none;
+    border:none;
+    font-size:1.4rem;
+    line-height:1;
+    cursor:pointer;
+    color:var(--ink-soft);
+  }
+  #modalClose:hover{ color:var(--bad); }
+  #modalTitle{ margin:0 0 4px; font-size:1.1rem; padding-right:24px; }
+  #modalSub{ color:var(--ink-soft); font-size:0.78rem; margin-bottom:14px; }
+  #modalTableWrap{ overflow:auto; border:1px solid var(--line); }
 </style>
 </head>
 <body>
@@ -362,8 +404,19 @@
       <select id="fCourse"><option value="">All</option></select>
     </div>
     <div class="field wide">
+      <label for="fOutcome">Board outcome</label>
+      <select id="fOutcome"><option value="">All</option></select>
+    </div>
+    <div class="field wide">
       <label for="fStudent">Student name or MMU ID</label>
       <input type="text" id="fStudent" placeholder="Search…">
+    </div>
+    <div class="field">
+      <label for="viewMode">View</label>
+      <select id="viewMode">
+        <option value="detail">All assessment lines</option>
+        <option value="aggregate">One row per student</option>
+      </select>
     </div>
     <button id="resetBtn" type="button">Clear filters</button>
     <button id="exportBtn" type="button">Export CSV</button>
@@ -384,6 +437,23 @@
   </div>
 
   <div id="emptyState">No rows match the current filters.</div>
+
+  <div id="detailModal">
+    <div id="detailModalBox">
+      <button id="modalClose" type="button" aria-label="Close">×</button>
+      <h3 id="modalTitle"></h3>
+      <div id="modalSub" class="mono"></div>
+      <div id="modalTableWrap">
+        <table>
+          <thead><tr>
+            <th>Assessment Component</th><th>Attempt</th><th>Submission Status</th>
+            <th>Personal Deadline</th><th>Component Mark</th><th>Letter Grade</th><th>Course Mark</th>
+          </tr></thead>
+          <tbody id="modalBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
   <section id="crossCheck">
     <h2>Cross-check against a results file</h2>
@@ -513,10 +583,61 @@
     "board outcome":"outcome"
   };
 
+  // One row per student+course, for the aggregated view. mmuid+coursecode is the same safe grouping
+  // key used everywhere else in this file. Board Outcome is confirmed never to disagree within such a
+  // group (verified against the full dataset), so it's shown plainly. Course Mark is NOT always stable
+  // within a group — a small number of rows carry duplicate/conflicting values that aren't explained by
+  // resits (attempt is identical) — so a genuine conflict is flagged rather than silently picking one.
+  var AGG_COLUMNS = [
+    ["surname",   "Surname"],
+    ["forename",  "Forename"],
+    ["mmuid",     "MMU ID"],
+    ["coursetitle","Course Title"],
+    ["coursemark","Course Mark"],
+    ["outcome",   "Board Outcome"]
+  ];
+
   var allRows = [];
   var currentRows = [];
+  var currentAggRows = [];
+  var totalAggGroups = 0; // unique mmuid+coursecode groups across the whole loaded file, unfiltered
+  var viewMode = 'detail'; // 'detail' | 'aggregate'
   var sortKey = null, sortDir = 1;
   var RENDER_CAP = 2000; // cap DOM rows for responsiveness; filtering/sorting/export still cover the full set
+
+  function activeColumns(){ return viewMode === 'aggregate' ? AGG_COLUMNS : COLUMNS; }
+
+  function buildAggregatedRows(rows){
+    var groups = {}; var order = [];
+    rows.forEach(function(r){
+      if(!r.mmuid || !r.coursecode) return;
+      var key = r.mmuid + '::' + r.coursecode;
+      var g = groups[key];
+      if(!g){
+        g = {
+          mmuid: r.mmuid, forename: r.forename, surname: r.surname,
+          coursecode: r.coursecode, coursetitle: r.coursetitle, outcome: r.outcome,
+          coursemark: r.coursemark, coursemarkConflict: false, _rows: []
+        };
+        groups[key] = g;
+        order.push(key);
+      } else if(r.coursemark !== '' && g.coursemark !== '' && String(r.coursemark) !== String(g.coursemark)){
+        g.coursemarkConflict = true; // same student/course, disagreeing non-blank Course Mark values
+      } else if(g.coursemark === '' && r.coursemark !== ''){
+        g.coursemark = r.coursemark;
+      }
+      g._rows.push(r);
+    });
+    return order.map(function(key){
+      var g = groups[key];
+      g._rows.sort(function(a,b){
+        var ra = attemptRank(a.attempt), rb = attemptRank(b.attempt);
+        if(ra !== rb) return ra - rb;
+        return String(a.assessdesc||'').localeCompare(String(b.assessdesc||''));
+      });
+      return g;
+    });
+  }
 
   var dropzone = document.getElementById('dropzone');
   var fileInput = document.getElementById('fileInput');
@@ -547,7 +668,10 @@
   });
 
   document.getElementById('newFileBtn').addEventListener('click', function(){
-    allRows = []; currentRows = [];
+    allRows = []; currentRows = []; currentAggRows = []; totalAggGroups = 0;
+    viewMode = 'detail';
+    document.getElementById('viewMode').value = 'detail';
+    updateExportBtnLabel();
     fileInput.value = '';
     controls.style.display = 'none';
     meta.style.display = 'none';
@@ -609,6 +733,10 @@
                 ' ' + v.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
           }
           rec[key] = (v===undefined||v===null) ? '' : v;
+          // "Resit Required" vs "Resit Required " (trailing space) is a real duplicate seen in the
+          // source data from inconsistent entry — trim only, don't collapse anything further, since
+          // several distinct "resit next year" wordings look similar but aren't the same outcome
+          if(key === 'outcome' && typeof rec[key] === 'string') rec[key] = rec[key].trim();
         });
         // skip fully blank rows
         if(!rec.mmuid && !rec.surname) continue;
@@ -621,6 +749,7 @@
       return;
     }
 
+    totalAggGroups = buildAggregatedRows(allRows).length;
     loadStatus.textContent = '';
     dropzone.style.display = 'none';
     buildFilters();
@@ -653,16 +782,48 @@
   var fYear = document.getElementById('fYear');
   var fYos = document.getElementById('fYos');
   var fCourse = document.getElementById('fCourse');
+  var fOutcome = document.getElementById('fOutcome');
   var fStudent = document.getElementById('fStudent');
+
+  // Course Title is a display label, not a safe grouping key — some titles are legitimately reused
+  // across more than one Course Code (e.g. the same title offered on different programmes). Course
+  // Code is the unique identifier, so the unit filter (and everything downstream of it) is keyed on
+  // code internally. The dropdown always shows "Title (Code)" — even for titles that are unambiguous
+  // today — since which titles collide can change as new data comes in.
+  var courseTitleByCode = {};
+
+  function buildCourseFilter(){
+    var seen = {};
+    courseTitleByCode = {};
+    allRows.forEach(function(r){
+      if(!r.coursecode) return;
+      if(!seen[r.coursecode]){ seen[r.coursecode] = true; courseTitleByCode[r.coursecode] = r.coursetitle || ''; }
+    });
+    var codes = Object.keys(seen).sort(function(a,b){
+      var ta = courseTitleByCode[a], tb = courseTitleByCode[b];
+      if(ta !== tb) return ta.localeCompare(tb);
+      return a.localeCompare(b);
+    });
+    var current = fCourse.value;
+    fCourse.innerHTML = '<option value="">All</option>';
+    codes.forEach(function(code){
+      var o = document.createElement('option');
+      o.value = code;
+      o.textContent = (courseTitleByCode[code] || '(no title)') + ' (' + code + ')';
+      fCourse.appendChild(o);
+    });
+    if(codes.indexOf(current) !== -1) fCourse.value = current;
+  }
 
   function buildFilters(){
     fillSelect(fDept, uniqueSorted('dept'));
     fillSelect(fYear, uniqueSorted('ayear'));
     fillSelect(fYos, uniqueSorted('yos'));
-    fillSelect(fCourse, uniqueSorted('coursetitle'));
+    fillSelect(fOutcome, uniqueSorted('outcome'));
+    buildCourseFilter();
   }
 
-  [fDept, fYear, fYos, fCourse].forEach(function(el){
+  [fDept, fYear, fYos, fCourse, fOutcome].forEach(function(el){
     el.addEventListener('change', applyFilters);
   });
   fStudent.addEventListener('input', debounce(applyFilters, 150));
@@ -677,23 +838,40 @@
   }
 
   document.getElementById('resetBtn').addEventListener('click', function(){
-    fDept.value=''; fYear.value=''; fYos.value=''; fCourse.value=''; fStudent.value='';
+    fDept.value=''; fYear.value=''; fYos.value=''; fCourse.value=''; fOutcome.value=''; fStudent.value='';
     applyFilters();
   });
 
   document.getElementById('exportBtn').addEventListener('click', function(){
-    exportCSV(currentRows);
+    if(viewMode === 'aggregate') exportCSV(currentAggRows, AGG_COLUMNS, 'windowpain-student-summary.csv');
+    else exportCSV(currentRows, COLUMNS, 'windowpain-export.csv');
+  });
+
+  var exportBtn = document.getElementById('exportBtn');
+  function updateExportBtnLabel(){
+    exportBtn.textContent = viewMode === 'aggregate' ? 'Export CSV (one row per student)' : 'Export CSV (all assessment lines)';
+  }
+  updateExportBtnLabel();
+
+  document.getElementById('viewMode').addEventListener('change', function(){
+    viewMode = this.value;
+    // column sets differ between views; a sort key from one view may not exist in the other
+    if(!activeColumns().some(function(c){ return c[0] === sortKey; })) { sortKey = null; sortDir = 1; }
+    updateExportBtnLabel();
+    buildHead();
+    render();
   });
 
   function applyFilters(){
-    var dept = fDept.value, year = fYear.value, yos = fYos.value, course = fCourse.value;
+    var dept = fDept.value, year = fYear.value, yos = fYos.value, course = fCourse.value, outcome = fOutcome.value;
     var q = fStudent.value.trim().toLowerCase();
 
     currentRows = allRows.filter(function(r){
       if(dept && r.dept !== dept) return false;
       if(year && r.ayear !== year) return false;
       if(yos && r.yos !== yos) return false;
-      if(course && r.coursetitle !== course) return false;
+      if(course && r.coursecode !== course) return false;
+      if(outcome && r.outcome !== outcome) return false;
       if(q){
         var full = ((r.forename||'')+' '+(r.surname||'')).toLowerCase();
         var idStr = String(r.mmuid||'').toLowerCase();
@@ -701,6 +879,7 @@
       }
       return true;
     });
+    currentAggRows = buildAggregatedRows(currentRows);
 
     if(sortKey) sortRows();
     render();
@@ -709,7 +888,7 @@
 
   function buildHead(){
     headRow.innerHTML = '';
-    COLUMNS.forEach(function(col){
+    activeColumns().forEach(function(col){
       var th = document.createElement('th');
       th.dataset.key = col[0];
       th.innerHTML = col[1] + '<span class="arrow">↕</span>';
@@ -722,9 +901,8 @@
     });
   }
 
-  function sortRows(){
-    var key = sortKey, dir = sortDir;
-    currentRows.sort(function(a,b){
+  function sortByKey(rows, key, dir){
+    rows.sort(function(a,b){
       var av = a[key], bv = b[key];
       var an = parseFloat(av), bn = parseFloat(bv);
       var bothNum = !isNaN(an) && !isNaN(bn) && av!=='' && bv!=='';
@@ -735,6 +913,11 @@
       if(av>bv) return 1*dir;
       return 0;
     });
+  }
+
+  function sortRows(){
+    if(!sortKey) return;
+    sortByKey(viewMode === 'aggregate' ? currentAggRows : currentRows, sortKey, sortDir);
   }
 
   function statusBadgeClass(status){
@@ -757,12 +940,20 @@
       }
     });
 
+    var isAgg = viewMode === 'aggregate';
+    var displayRows = isAgg ? currentAggRows : currentRows;
+    var columns = activeColumns();
+
     bodyRows.innerHTML = '';
     var frag = document.createDocumentFragment();
-    var rowsToRender = currentRows.length > RENDER_CAP ? currentRows.slice(0, RENDER_CAP) : currentRows;
+    var rowsToRender = displayRows.length > RENDER_CAP ? displayRows.slice(0, RENDER_CAP) : displayRows;
     rowsToRender.forEach(function(r){
       var tr = document.createElement('tr');
-      COLUMNS.forEach(function(col){
+      if(isAgg){
+        tr.className = 'agg-row';
+        tr.addEventListener('click', function(){ openDetailModal(r); });
+      }
+      columns.forEach(function(col){
         var td = document.createElement('td');
         var key = col[0];
         var v = r[key];
@@ -772,6 +963,9 @@
           badge.className = 'badge ' + statusBadgeClass(v);
           badge.textContent = v || '—';
           td.appendChild(badge);
+        } else if(key === 'coursemark' && isAgg && r.coursemarkConflict){
+          td.className = 'conflict';
+          td.textContent = (v===''||v==null?'—':v) + ' (conflicting values — click row for detail)';
         } else {
           td.textContent = (v===''||v==null) ? '—' : v;
         }
@@ -782,34 +976,67 @@
     bodyRows.appendChild(frag);
 
     var renderCapNotice = document.getElementById('renderCapNotice');
-    if(currentRows.length > RENDER_CAP){
-      renderCapNotice.textContent = 'Displaying the first ' + RENDER_CAP.toLocaleString() + ' of ' + currentRows.length.toLocaleString() + ' matching rows — narrow the filters above to browse the rest (CSV export always includes all of them).';
+    if(displayRows.length > RENDER_CAP){
+      renderCapNotice.textContent = 'Displaying the first ' + RENDER_CAP.toLocaleString() + ' of ' + displayRows.length.toLocaleString() + ' matching rows — narrow the filters above to browse the rest (CSV export always includes all of them).';
       renderCapNotice.style.display = 'block';
     } else {
       renderCapNotice.style.display = 'none';
     }
 
-    tableWrap.style.display = currentRows.length ? 'block' : 'none';
-    emptyState.style.display = currentRows.length ? 'none' : 'block';
+    tableWrap.style.display = displayRows.length ? 'block' : 'none';
+    emptyState.style.display = displayRows.length ? 'none' : 'block';
 
-    document.getElementById('countShown').textContent = currentRows.length.toLocaleString();
-    document.getElementById('countTotal').textContent = allRows.length.toLocaleString();
+    document.getElementById('countShown').textContent = displayRows.length.toLocaleString();
+    document.getElementById('countTotal').textContent = (isAgg ? totalAggGroups : allRows.length).toLocaleString();
     var studentSet = {};
     currentRows.forEach(function(r){ studentSet[r.mmuid]=true; });
     document.getElementById('countStudents').textContent = Object.keys(studentSet).length.toLocaleString();
   }
 
-  function exportCSV(rows){
+  // ---------- Aggregated view: per-student detail popup ----------
+  var detailModal = document.getElementById('detailModal');
+  document.getElementById('modalClose').addEventListener('click', closeDetailModal);
+  detailModal.addEventListener('click', function(e){ if(e.target === detailModal) closeDetailModal(); });
+  document.addEventListener('keydown', function(e){ if(e.key === 'Escape') closeDetailModal(); });
+
+  function closeDetailModal(){ detailModal.style.display = 'none'; }
+
+  function openDetailModal(group){
+    document.getElementById('modalTitle').textContent = (group.surname||'') + ', ' + (group.forename||'') + ' — ' + (group.coursetitle || '(no title)');
+    var sub = 'MMU ID ' + group.mmuid + ' · Course Code ' + group.coursecode + ' · Board Outcome: ' + (group.outcome || '—');
+    if(group.coursemarkConflict) sub += ' · Course Mark shows conflicting values across these rows — see below';
+    document.getElementById('modalSub').textContent = sub;
+    var tbody = document.getElementById('modalBody');
+    tbody.innerHTML = '';
+    var frag = document.createDocumentFragment();
+    group._rows.forEach(function(r){
+      var tr = document.createElement('tr');
+      [r.assessdesc, r.attempt, r.substatus, r.deadline, r.mark, r.grade, r.coursemark].forEach(function(v){
+        var td = document.createElement('td');
+        td.textContent = (v===''||v==null) ? '—' : v;
+        tr.appendChild(td);
+      });
+      frag.appendChild(tr);
+    });
+    tbody.appendChild(frag);
+    detailModal.style.display = 'flex';
+  }
+
+  function exportCSV(rows, columns, filename){
     if(!rows.length) return;
-    var lines = [COLUMNS.map(function(c){return csvEscape(c[1]);}).join(',')];
+    var lines = [columns.map(function(c){return csvEscape(c[1]);}).join(',')];
     rows.forEach(function(r){
-      lines.push(COLUMNS.map(function(c){ return csvEscape(r[c[0]]); }).join(','));
+      lines.push(columns.map(function(c){
+        var v = r[c[0]];
+        if(c[0] === 'coursemark' && r.coursemarkConflict) v = v + ' (conflicting values in Checking Window)';
+        return csvEscape(v);
+      }).join(','));
     });
     var blob = new Blob([lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
-    a.download = 'checking-window-export.csv';
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -954,11 +1181,14 @@
       var o = document.createElement('option'); o.value=v; o.textContent=v;
       ccUnitValue.appendChild(o);
     });
-    // try to preselect a value matching the currently chosen unit title
+    // try to preselect a value matching the currently chosen unit's title — fCourse.value is now a
+    // Course Code (the safe grouping key), but the results file's own "unit" column holds free-text
+    // titles, so look the title up rather than comparing the code directly
     if(vals.indexOf(current) !== -1){
       ccUnitValue.value = current;
-    } else if(fCourse.value){
-      var guess = vals.find(function(v){ return v.toLowerCase() === fCourse.value.toLowerCase(); });
+    } else if(fCourse.value && courseTitleByCode[fCourse.value]){
+      var selTitle = courseTitleByCode[fCourse.value].toLowerCase();
+      var guess = vals.find(function(v){ return v.toLowerCase() === selTitle; });
       if(guess) ccUnitValue.value = guess;
     }
   }
@@ -982,7 +1212,7 @@
       if(fDept.value && rec.dept !== fDept.value) return;
       if(fYear.value && rec.ayear !== fYear.value) return;
       if(fYos.value && rec.yos !== fYos.value) return;
-      if(rec.coursetitle !== fCourse.value) return;
+      if(rec.coursecode !== fCourse.value) return;
       var v = rec.assessdesc;
       if(v==='' || v==null) return;
       if(!seen[v]){ seen[v]=true; vals.push(v); }
@@ -1107,7 +1337,7 @@
       if(fDept.value && rec.dept !== fDept.value) return;
       if(fYear.value && rec.ayear !== fYear.value) return;
       if(fYos.value && rec.yos !== fYos.value) return;
-      if(rec.coursetitle !== fCourse.value) return;
+      if(rec.coursecode !== fCourse.value) return;
       if(componentVal && rec.assessdesc !== componentVal) return;
       var key = normalizeId(rec.mmuid);
       if(!key) return;
