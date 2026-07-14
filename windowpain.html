@@ -318,6 +318,8 @@
   .badge.conf-green{ background:#e3f0e5; color:var(--ok); }
   .badge.conf-yellow{ background:#fbf3d4; color:#8a6d00; cursor:help; }
   .badge.conf-red{ background:#f6dede; color:var(--bad); }
+  .badge.flagged{ background:#f6dede; color:var(--bad); }
+  .badge.clear{ background:#e3f0e5; color:var(--ok); }
 
   @media (max-width:640px){
     tbody td, thead th{ font-size:0.72rem; padding:6px 8px; }
@@ -420,6 +422,7 @@
       <select id="viewMode">
         <option value="detail">All assessment lines</option>
         <option value="aggregate">One row per student</option>
+        <option value="profile">Student profile (by programme)</option>
       </select>
     </div>
     <button id="resetBtn" type="button">Clear filters</button>
@@ -449,10 +452,7 @@
       <div id="modalSub" class="mono"></div>
       <div id="modalTableWrap">
         <table>
-          <thead><tr>
-            <th>Assessment Component</th><th>Attempt</th><th>Submission Status</th>
-            <th>Personal Deadline</th><th>Component Mark</th><th>Letter Grade</th><th>Course Mark</th>
-          </tr></thead>
+          <thead><tr id="modalHead"></tr></thead>
           <tbody id="modalBody"></tbody>
         </table>
       </div>
@@ -601,15 +601,38 @@
     ["outcome",   "Board Outcome"]
   ];
 
+  // One row per student+programme, for the "Student profile (by programme)" view.
+  var PROFILE_COLUMNS = [
+    ["surname",   "Surname"],
+    ["forename",  "Forename"],
+    ["mmuid",     "MMU ID"],
+    ["programme", "Programme Curriculum"],
+    ["unitCount", "Units"],
+    ["flaggedCount", "Flagged Outcomes"]
+  ];
+
   var allRows = [];
   var currentRows = [];
   var currentAggRows = [];
+  var currentProfileRows = [];
   var totalAggGroups = 0; // unique mmuid+coursecode groups across the whole loaded file, unfiltered
-  var viewMode = 'detail'; // 'detail' | 'aggregate'
+  var totalProfileGroups = 0; // unique mmuid+programme groups across the whole loaded file, unfiltered
+  var viewMode = 'detail'; // 'detail' | 'aggregate' | 'profile'
   var sortKey = null, sortDir = 1;
   var RENDER_CAP = 2000; // cap DOM rows for responsiveness; filtering/sorting/export still cover the full set
 
-  function activeColumns(){ return viewMode === 'aggregate' ? AGG_COLUMNS : COLUMNS; }
+  function activeColumns(){
+    if(viewMode === 'aggregate') return AGG_COLUMNS;
+    if(viewMode === 'profile') return PROFILE_COLUMNS;
+    return COLUMNS;
+  }
+
+  // "Resit"/"Fail" outcomes are what a profile overview is for spotting — everything else (Pass*,
+  // Continue, Awaiting Result) is left alone rather than trying to enumerate every wording precisely.
+  function isFlaggedOutcome(outcome){
+    var o = String(outcome||'').toLowerCase();
+    return o.indexOf('resit') !== -1 || o.indexOf('fail') !== -1;
+  }
 
   function buildAggregatedRows(rows){
     var groups = {}; var order = [];
@@ -643,6 +666,67 @@
     });
   }
 
+  // Same grouping approach as buildAggregatedRows, but keyed on mmuid+programme+coursecode. This
+  // matters because ~90 course codes in the real data turn out to be shared between a student's two
+  // simultaneous programmes (18 students are enrolled on more than one programme at once) — a
+  // student's profile under Programme A must not pull in units that only belong to Programme B.
+  function buildUnitRecordsByProgramme(rows){
+    var groups = {}; var order = [];
+    rows.forEach(function(r){
+      if(!r.mmuid || !r.coursecode || !r.programme) return;
+      var key = r.mmuid + '::' + r.programme + '::' + r.coursecode;
+      var g = groups[key];
+      if(!g){
+        g = {
+          mmuid: r.mmuid, forename: r.forename, surname: r.surname, programme: r.programme,
+          coursecode: r.coursecode, coursetitle: r.coursetitle, outcome: r.outcome,
+          coursemark: r.coursemark, coursemarkConflict: false, _rows: []
+        };
+        groups[key] = g;
+        order.push(key);
+      } else if(r.coursemark !== '' && g.coursemark !== '' && String(r.coursemark) !== String(g.coursemark)){
+        g.coursemarkConflict = true;
+      } else if(g.coursemark === '' && r.coursemark !== ''){
+        g.coursemark = r.coursemark;
+      }
+      g._rows.push(r);
+    });
+    return order.map(function(key){
+      var g = groups[key];
+      g._rows.sort(function(a,b){
+        var ra = attemptRank(a.attempt), rb = attemptRank(b.attempt);
+        if(ra !== rb) return ra - rb;
+        return String(a.assessdesc||'').localeCompare(String(b.assessdesc||''));
+      });
+      return g;
+    });
+  }
+
+  // One row per student+programme: built from the unit-level records above so each unit's Board
+  // Outcome / Course Mark reuse the same conflict-safe resolution, then grouped further into the
+  // profile summary row.
+  function buildProfileRows(rows){
+    var unitRecords = buildUnitRecordsByProgramme(rows);
+    var groups = {}; var order = [];
+    unitRecords.forEach(function(u){
+      var key = u.mmuid + '::' + u.programme;
+      var p = groups[key];
+      if(!p){
+        p = { mmuid: u.mmuid, forename: u.forename, surname: u.surname, programme: u.programme, units: [] };
+        groups[key] = p;
+        order.push(key);
+      }
+      p.units.push(u);
+    });
+    return order.map(function(key){
+      var p = groups[key];
+      p.units.sort(function(a,b){ return String(a.coursetitle||'').localeCompare(String(b.coursetitle||'')); });
+      p.unitCount = p.units.length;
+      p.flaggedCount = p.units.filter(function(u){ return isFlaggedOutcome(u.outcome); }).length;
+      return p;
+    });
+  }
+
   var dropzone = document.getElementById('dropzone');
   var fileInput = document.getElementById('fileInput');
   var loadStatus = document.getElementById('loadStatus');
@@ -672,7 +756,8 @@
   });
 
   document.getElementById('newFileBtn').addEventListener('click', function(){
-    allRows = []; currentRows = []; currentAggRows = []; totalAggGroups = 0;
+    allRows = []; currentRows = []; currentAggRows = []; currentProfileRows = [];
+    totalAggGroups = 0; totalProfileGroups = 0;
     viewMode = 'detail';
     document.getElementById('viewMode').value = 'detail';
     updateExportBtnLabel();
@@ -754,6 +839,7 @@
     }
 
     totalAggGroups = buildAggregatedRows(allRows).length;
+    totalProfileGroups = buildProfileRows(allRows).length;
     loadStatus.textContent = '';
     dropzone.style.display = 'none';
     buildFilters();
@@ -797,6 +883,27 @@
   // today — since which titles collide can change as new data comes in.
   var courseTitleByCode = {};
 
+  // Programme Curriculum never crosses departments in the real data (verified: 0 of 134 programmes
+  // appear under more than one department), so scoping this to the selected department is a lossless
+  // cascade, not just a display filter — the same pattern as buildCourseFilter below.
+  function buildProgrammeFilter(deptFilter){
+    var seen = {};
+    allRows.forEach(function(r){
+      if(!r.programme) return;
+      if(deptFilter && r.dept !== deptFilter) return;
+      seen[r.programme] = true;
+    });
+    var values = Object.keys(seen).sort(function(a,b){ return a.localeCompare(b); });
+    var current = fProgramme.value;
+    fProgramme.innerHTML = '<option value="">All</option>';
+    values.forEach(function(v){
+      var o = document.createElement('option'); o.value = v; o.textContent = v;
+      fProgramme.appendChild(o);
+    });
+    // if the previously selected programme isn't offered in the newly selected department, fall back to "All"
+    if(values.indexOf(current) !== -1) fProgramme.value = current;
+  }
+
   // The unit list is scoped to the currently selected department — a department has its own set of
   // units, so showing every other department's units too just makes the dropdown harder to search.
   function buildCourseFilter(deptFilter){
@@ -828,12 +935,13 @@
     fillSelect(fDept, uniqueSorted('dept'));
     fillSelect(fYear, uniqueSorted('ayear'));
     fillSelect(fYos, uniqueSorted('yos'));
-    fillSelect(fProgramme, uniqueSorted('programme'));
     fillSelect(fOutcome, uniqueSorted('outcome'));
+    buildProgrammeFilter(fDept.value);
     buildCourseFilter(fDept.value);
   }
 
   fDept.addEventListener('change', function(){
+    buildProgrammeFilter(fDept.value);
     buildCourseFilter(fDept.value);
     applyFilters();
   });
@@ -853,18 +961,23 @@
 
   document.getElementById('resetBtn').addEventListener('click', function(){
     fDept.value=''; fYear.value=''; fYos.value=''; fProgramme.value=''; fCourse.value=''; fOutcome.value=''; fStudent.value='';
-    buildCourseFilter(''); // dept cleared, so the unit list goes back to showing every department
+    // dept cleared, so the programme and unit lists go back to showing every department
+    buildProgrammeFilter('');
+    buildCourseFilter('');
     applyFilters();
   });
 
   document.getElementById('exportBtn').addEventListener('click', function(){
     if(viewMode === 'aggregate') exportCSV(currentAggRows, AGG_COLUMNS, 'windowpain-student-summary.csv');
+    else if(viewMode === 'profile') exportCSV(currentProfileRows, PROFILE_COLUMNS, 'windowpain-student-profile.csv');
     else exportCSV(currentRows, COLUMNS, 'windowpain-export.csv');
   });
 
   var exportBtn = document.getElementById('exportBtn');
   function updateExportBtnLabel(){
-    exportBtn.textContent = viewMode === 'aggregate' ? 'Export CSV (one row per student)' : 'Export CSV (all assessment lines)';
+    exportBtn.textContent = viewMode === 'aggregate' ? 'Export CSV (one row per student)'
+      : viewMode === 'profile' ? 'Export CSV (one row per student profile)'
+      : 'Export CSV (all assessment lines)';
   }
   updateExportBtnLabel();
 
@@ -881,21 +994,34 @@
     var dept = fDept.value, year = fYear.value, yos = fYos.value, programme = fProgramme.value, course = fCourse.value, outcome = fOutcome.value;
     var q = fStudent.value.trim().toLowerCase();
 
-    currentRows = allRows.filter(function(r){
+    function matchesCommonFilters(r){
       if(dept && r.dept !== dept) return false;
       if(year && r.ayear !== year) return false;
       if(yos && r.yos !== yos) return false;
       if(programme && r.programme !== programme) return false;
       if(course && r.coursecode !== course) return false;
-      if(outcome && r.outcome !== outcome) return false;
       if(q){
         var full = ((r.forename||'')+' '+(r.surname||'')).toLowerCase();
         var idStr = String(r.mmuid||'').toLowerCase();
         if(full.indexOf(q)===-1 && idStr.indexOf(q)===-1) return false;
       }
       return true;
+    }
+
+    currentRows = allRows.filter(function(r){
+      return matchesCommonFilters(r) && (!outcome || r.outcome === outcome);
     });
     currentAggRows = buildAggregatedRows(currentRows);
+
+    // Profile mode groups a student's units across a whole programme. Board Outcome there must decide
+    // which STUDENTS appear (any one matching unit qualifies them), not strip their other units before
+    // grouping happens — otherwise a student's profile would only ever show the flagged unit. So this
+    // is built from the outcome-unfiltered rows, then filtered afterwards at the student level.
+    var profileSourceRows = allRows.filter(matchesCommonFilters);
+    var allProfileRows = buildProfileRows(profileSourceRows);
+    currentProfileRows = outcome ? allProfileRows.filter(function(p){
+      return p.units.some(function(u){ return u.outcome === outcome; });
+    }) : allProfileRows;
 
     if(sortKey) sortRows();
     render();
@@ -931,9 +1057,15 @@
     });
   }
 
+  function rowsForCurrentView(){
+    if(viewMode === 'aggregate') return currentAggRows;
+    if(viewMode === 'profile') return currentProfileRows;
+    return currentRows;
+  }
+
   function sortRows(){
     if(!sortKey) return;
-    sortByKey(viewMode === 'aggregate' ? currentAggRows : currentRows, sortKey, sortDir);
+    sortByKey(rowsForCurrentView(), sortKey, sortDir);
   }
 
   function statusBadgeClass(status){
@@ -957,7 +1089,8 @@
     });
 
     var isAgg = viewMode === 'aggregate';
-    var displayRows = isAgg ? currentAggRows : currentRows;
+    var isProfile = viewMode === 'profile';
+    var displayRows = rowsForCurrentView();
     var columns = activeColumns();
 
     bodyRows.innerHTML = '';
@@ -965,9 +1098,9 @@
     var rowsToRender = displayRows.length > RENDER_CAP ? displayRows.slice(0, RENDER_CAP) : displayRows;
     rowsToRender.forEach(function(r){
       var tr = document.createElement('tr');
-      if(isAgg){
+      if(isAgg || isProfile){
         tr.className = 'agg-row';
-        tr.addEventListener('click', function(){ openDetailModal(r); });
+        tr.addEventListener('click', function(){ isAgg ? openDetailModal(r) : openProfileModal(r); });
       }
       columns.forEach(function(col){
         var td = document.createElement('td');
@@ -982,6 +1115,11 @@
         } else if(key === 'coursemark' && isAgg && r.coursemarkConflict){
           td.className = 'conflict';
           td.textContent = (v===''||v==null?'—':v) + ' (conflicting values — click row for detail)';
+        } else if(key === 'flaggedCount' && isProfile){
+          var flagBadge = document.createElement('span');
+          if(v > 0){ flagBadge.className = 'badge flagged'; flagBadge.textContent = v + ' of ' + r.unitCount + ' flagged'; }
+          else { flagBadge.className = 'badge clear'; flagBadge.textContent = 'All clear'; }
+          td.appendChild(flagBadge);
         } else {
           td.textContent = (v===''||v==null) ? '—' : v;
         }
@@ -1003,13 +1141,14 @@
     emptyState.style.display = displayRows.length ? 'none' : 'block';
 
     document.getElementById('countShown').textContent = displayRows.length.toLocaleString();
-    document.getElementById('countTotal').textContent = (isAgg ? totalAggGroups : allRows.length).toLocaleString();
+    var totalForView = isAgg ? totalAggGroups : isProfile ? totalProfileGroups : allRows.length;
+    document.getElementById('countTotal').textContent = totalForView.toLocaleString();
     var studentSet = {};
     currentRows.forEach(function(r){ studentSet[r.mmuid]=true; });
     document.getElementById('countStudents').textContent = Object.keys(studentSet).length.toLocaleString();
   }
 
-  // ---------- Aggregated view: per-student detail popup ----------
+  // ---------- Aggregated & profile views: detail popup ----------
   var detailModal = document.getElementById('detailModal');
   document.getElementById('modalClose').addEventListener('click', closeDetailModal);
   detailModal.addEventListener('click', function(e){ if(e.target === detailModal) closeDetailModal(); });
@@ -1017,17 +1156,24 @@
 
   function closeDetailModal(){ detailModal.style.display = 'none'; }
 
-  function openDetailModal(group){
-    document.getElementById('modalTitle').textContent = (group.surname||'') + ', ' + (group.forename||'') + ' — ' + (group.coursetitle || '(no title)');
-    var sub = 'MMU ID ' + group.mmuid + ' · Course Code ' + group.coursecode + ' · Board Outcome: ' + (group.outcome || '—');
-    if(group.coursemarkConflict) sub += ' · Course Mark shows conflicting values across these rows — see below';
+  // Shared by both popup contents: a per-unit breakdown (openDetailModal) and a per-student,
+  // per-programme unit list (openProfileModal). headers/rows describe whatever this call needs shown.
+  function openModal(title, sub, headers, rows){
+    document.getElementById('modalTitle').textContent = title;
     document.getElementById('modalSub').textContent = sub;
+    var thead = document.getElementById('modalHead');
+    thead.innerHTML = '';
+    headers.forEach(function(h){
+      var th = document.createElement('th');
+      th.textContent = h;
+      thead.appendChild(th);
+    });
     var tbody = document.getElementById('modalBody');
     tbody.innerHTML = '';
     var frag = document.createDocumentFragment();
-    group._rows.forEach(function(r){
+    rows.forEach(function(cells){
       var tr = document.createElement('tr');
-      [r.assessdesc, r.attempt, r.substatus, r.deadline, r.mark, r.grade, r.coursemark].forEach(function(v){
+      cells.forEach(function(v){
         var td = document.createElement('td');
         td.textContent = (v===''||v==null) ? '—' : v;
         tr.appendChild(td);
@@ -1038,6 +1184,34 @@
     detailModal.style.display = 'flex';
   }
 
+  function openDetailModal(group){
+    var title = (group.surname||'') + ', ' + (group.forename||'') + ' — ' + (group.coursetitle || '(no title)');
+    var sub = 'MMU ID ' + group.mmuid + ' · Course Code ' + group.coursecode + ' · Board Outcome: ' + (group.outcome || '—');
+    if(group.coursemarkConflict) sub += ' · Course Mark shows conflicting values across these rows — see below';
+    var headers = ['Assessment Component', 'Attempt', 'Submission Status', 'Personal Deadline', 'Component Mark', 'Letter Grade', 'Course Mark'];
+    var rows = group._rows.map(function(r){
+      return [r.assessdesc, r.attempt, r.substatus, r.deadline, r.mark, r.grade, r.coursemark];
+    });
+    openModal(title, sub, headers, rows);
+  }
+
+  function openProfileModal(p){
+    var title = (p.surname||'') + ', ' + (p.forename||'') + ' — ' + (p.programme || '(no programme)');
+    var sub = 'MMU ID ' + p.mmuid + ' · ' + p.unitCount + ' unit' + (p.unitCount===1?'':'s') +
+      (p.flaggedCount ? ' · ' + p.flaggedCount + ' flagged' : '');
+    var headers = ['Course Title (Code)', 'Board Outcome', 'Course Mark'];
+    var sortedUnits = p.units.slice().sort(function(a,b){
+      var fa = isFlaggedOutcome(a.outcome) ? 0 : 1, fb = isFlaggedOutcome(b.outcome) ? 0 : 1;
+      if(fa !== fb) return fa - fb;
+      return String(a.coursetitle||'').localeCompare(String(b.coursetitle||''));
+    });
+    var rows = sortedUnits.map(function(u){
+      var mark = u.coursemark + (u.coursemarkConflict ? ' (conflicting values)' : '');
+      return [(u.coursetitle || '(no title)') + ' (' + u.coursecode + ')', u.outcome, mark];
+    });
+    openModal(title, sub, headers, rows);
+  }
+
   function exportCSV(rows, columns, filename){
     if(!rows.length) return;
     var lines = [columns.map(function(c){return csvEscape(c[1]);}).join(',')];
@@ -1045,6 +1219,7 @@
       lines.push(columns.map(function(c){
         var v = r[c[0]];
         if(c[0] === 'coursemark' && r.coursemarkConflict) v = v + ' (conflicting values in Checking Window)';
+        if(c[0] === 'flaggedCount') v = r.flaggedCount + ' of ' + r.unitCount;
         return csvEscape(v);
       }).join(','));
     });
