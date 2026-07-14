@@ -8,8 +8,12 @@ It's a single HTML file, no installation: open it in a browser and go.
 
 **What it does:**
 
-1. Load the Checking Window spreadsheet. Filter and search by department, academic year, year of study, unit, or student.  Export any filtered view as CSV.
-2. Load a second file and cross-check its marks against the Checking Window for a chosen unit (and assessment component, if it has more than one). It flags matches, mismatches, and anyone missing from either file.
+1. Load the Checking Window spreadsheet. Filter and search by department, academic year, year of study, programme curriculum, unit, board outcome, or student name/MMU ID — picking a department narrows the programme and unit lists down to that department's own ones.
+2. Switch between three views of the filtered rows, and export whichever one is on screen as CSV:
+   - **All assessment lines** — the raw data, one row per assessment component.
+   - **One row per student** — one row per student per unit; click through to a popup with every component for that unit, sorted by attempt, so a resit's position relative to the first sit is obvious.
+   - **Student profile (by programme)** — one row per student per programme (grouped so a student on two programmes at once doesn't get merged into one), with a popup listing every unit on that programme and its outcome, flagged (resit/fail) ones sorted first.
+3. Load a second file and cross-check its marks against the Checking Window for a chosen unit (and assessment component, if it has more than one). It flags matches, mismatches, and anyone missing from either file.
 
 **Confidence colour (Green / Yellow / Red):** every matched row also gets a confidence rating, because a "Match" can still hide something worth a second look.
 
