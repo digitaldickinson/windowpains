@@ -315,6 +315,9 @@
   .badge.mismatch{ background:#f6dede; color:var(--bad); }
   .badge.missingres{ background:#fbeee0; color:var(--warn); }
   .badge.missingcw{ background:#e6e9f6; color:#39498f; }
+  .badge.conf-green{ background:#e3f0e5; color:var(--ok); }
+  .badge.conf-yellow{ background:#fbf3d4; color:#8a6d00; cursor:help; }
+  .badge.conf-red{ background:#f6dede; color:var(--bad); }
 
   @media (max-width:640px){
     tbody td, thead th{ font-size:0.72rem; padding:6px 8px; }
@@ -452,7 +455,7 @@
       <table>
         <thead><tr>
           <th>Surname</th><th>Forename</th><th>MMU ID</th><th>Results File Name</th>
-          <th>Checking Window Mark</th><th>Results File Mark</th><th>Diff</th><th>Status</th>
+          <th>Checking Window Mark</th><th>Results File Mark</th><th>Diff</th><th>Status</th><th>Confidence</th>
         </tr></thead>
         <tbody id="ccBodyRows"></tbody>
       </table>
@@ -1112,13 +1115,22 @@
       var rank = attemptRank(rec.attempt);
       var existing = mainMap[key];
       if(!existing){
-        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: false};
+        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: false, overridden: false};
         return;
       }
-      if(rank > existing.rank || (rank === existing.rank && existing.mark === '' && mark !== '')){
-        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: existing.dup};
-      } else if(rank === existing.rank && mark !== '' && existing.mark !== '' && String(mark) !== String(existing.mark)){
-        existing.dup = true;
+      if(rank > existing.rank){
+        // a resit (or later resit) superseding an earlier attempt — worth flagging if it actually
+        // changed the value, so a reviewer knows the mark being checked isn't the first-sit mark
+        var changedValue = existing.mark !== '' && mark !== '' && String(mark) !== String(existing.mark);
+        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: existing.dup, overridden: existing.overridden || changedValue};
+      } else if(rank === existing.rank){
+        if(existing.mark === '' && mark !== ''){
+          existing.mark = mark;
+        } else if(mark !== '' && existing.mark !== '' && String(mark) !== String(existing.mark)){
+          existing.dup = true; // same attempt, conflicting marks — a genuine data anomaly, not resolved silently
+        }
+      } else if(existing.mark !== '' && mark !== '' && String(mark) !== String(existing.mark)){
+        existing.overridden = true; // encountered the superseded (lower-attempt) row after the resit, in either row order
       }
     });
 
@@ -1129,13 +1141,14 @@
     var results = [];
     Object.keys(keys).forEach(function(key){
       var m = mainMap[key], x = extMap[key];
-      var status, diff = '';
+      var status, diff = '', nonNumericCompare = false;
       if(m && x){
         var mn = parseFloat(m.mark), xn = parseFloat(x.mark);
         if(!isNaN(mn) && !isNaN(xn)){
           diff = +(mn - xn).toFixed(2);
           status = Math.abs(diff) <= tolerance ? 'match' : 'mismatch';
         } else {
+          nonNumericCompare = true;
           status = (String(m.mark).trim().toLowerCase() === String(x.mark).trim().toLowerCase()) ? 'match' : 'mismatch';
         }
       } else if(m && !x){
@@ -1143,7 +1156,7 @@
       } else {
         status = 'missingcw';
       }
-      results.push({
+      var row = {
         mmuid: m ? m.mmuid : normalizeId(x.rawId),
         forename: m ? m.forename : '',
         surname: m ? m.surname : '',
@@ -1152,9 +1165,13 @@
         resMark: x ? x.mark : '',
         cwDup: m ? m.dup : false,
         dup: x ? x.dup : false,
+        cwOverridden: m ? m.overridden : false,
+        nonNumericCompare: nonNumericCompare,
         diff: diff,
         status: status
-      });
+      };
+      row.confidence = computeConfidence(row, tolerance);
+      results.push(row);
     });
 
     var order = {mismatch:0, missingres:1, missingcw:2, match:3};
@@ -1168,11 +1185,30 @@
   }
 
   var statusLabel = {match:'Match', mismatch:'Mismatch', missingres:'Missing in results file', missingcw:'Missing in Checking Window'};
+  var confidenceLabel = {green:'Green', yellow:'Yellow', red:'Red'};
 
   // shared between the on-screen table and the CSV export so exported rows carry the same
   // duplicate-data warnings a person reviewing on screen would see
   function cwMarkText(r){ return r.cwMark + (r.cwDup ? ' (conflicting duplicate rows in Checking Window)' : ''); }
   function resMarkText(r){ return r.resMark + (r.dup ? ' (dup in results file)' : ''); }
+
+  // Confidence rating for a checked row: green = clean exact match, red = mismatch/missing (needs
+  // attention regardless), yellow = it matched, but only after the app made a judgement call —
+  // a resit overriding an earlier attempt, a duplicate row that had to be picked between, a
+  // non-numeric/text comparison, or a match that only worked because of the tolerance setting.
+  // These are exactly the cases worth a second glance even though they're technically "Match".
+  function computeConfidence(r, tolerance){
+    if(r.status !== 'match'){
+      return {level:'red', reasons:[]};
+    }
+    var reasons = [];
+    if(r.cwOverridden) reasons.push('Checking Window mark comes from a resit overriding an earlier attempt');
+    if(r.cwDup) reasons.push('conflicting duplicate rows for this student/component in the Checking Window');
+    if(r.dup) reasons.push('duplicate rows for this student in the results file');
+    if(r.nonNumericCompare) reasons.push('compared as text, not as numbers');
+    if(tolerance > 0 && typeof r.diff === 'number' && r.diff !== 0) reasons.push('only matches within the ±' + tolerance + ' tolerance, not exactly');
+    return reasons.length ? {level:'yellow', reasons:reasons} : {level:'green', reasons:[]};
+  }
 
   // A very low proportion of the Checking Window roster showing up in the results file usually means
   // the wrong column, unit, sheet, or file was picked — not that most students genuinely have no result.
@@ -1222,6 +1258,13 @@
       badge.textContent = statusLabel[r.status];
       statTd.appendChild(badge);
       tr.appendChild(statTd);
+      var confTd = document.createElement('td');
+      var confBadge = document.createElement('span');
+      confBadge.className = 'badge conf-' + r.confidence.level;
+      confBadge.textContent = confidenceLabel[r.confidence.level];
+      if(r.confidence.reasons.length) confBadge.title = r.confidence.reasons.join('; ');
+      confTd.appendChild(confBadge);
+      tr.appendChild(confTd);
       frag.appendChild(tr);
     });
     ccBodyRows.appendChild(frag);
@@ -1230,12 +1273,12 @@
 
   document.getElementById('ccExportBtn').addEventListener('click', function(){
     if(!lastCrossCheckRows.length) return;
-    var head = ['Surname','Forename','MMU ID','Results File Name','Checking Window Mark','Results File Mark','Diff','Status'];
+    var head = ['Surname','Forename','MMU ID','Results File Name','Checking Window Mark','Results File Mark','Diff','Status','Confidence','Confidence Reason'];
     var lines = [head.map(csvEscape).join(',')];
     lastCrossCheckRows.forEach(function(r){
       var cwMark = r.cwMark==='' ? '' : cwMarkText(r);
       var resMark = r.resMark==='' ? '' : resMarkText(r);
-      lines.push([r.surname,r.forename,r.mmuid,r.resName,cwMark,resMark,r.diff,statusLabel[r.status]].map(csvEscape).join(','));
+      lines.push([r.surname,r.forename,r.mmuid,r.resName,cwMark,resMark,r.diff,statusLabel[r.status],confidenceLabel[r.confidence.level],r.confidence.reasons.join('; ')].map(csvEscape).join(','));
     });
     var blob = new Blob([lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
     var url = URL.createObjectURL(blob);
