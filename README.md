@@ -4,6 +4,8 @@ WindowPains is a browser-based tool for cross-checking assessments against the m
 
 It's a single HTML file, no installation: open it in a browser and go.
 
+**Use it now:** [digitaldickinson.github.io/windowpains/windowpain.html](https://digitaldickinson.github.io/windowpains/windowpain.html)
+
 **What it does:**
 
 1. Load the Checking Window spreadsheet. Filter and search by department, academic year, year of study, unit, or student.  Export any filtered view as CSV.
