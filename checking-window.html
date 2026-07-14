@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checking Window — Assessment Lookup</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#1b2430;
+    --ink-soft:#4a5568;
+    --paper:#f5f3ee;
+    --panel:#ffffff;
+    --line:#d8d3c7;
+    --accent:#8a3b2b;
+    --accent-soft:#c8562e;
+    --stripe:#f0ede4;
+    --focus:#1b4f72;
+    --ok:#2e6b3e;
+    --warn:#a15c00;
+    --bad:#a12626;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Iowan Old Style','Georgia',serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono{ font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace; }
+
+  header{
+    padding:28px clamp(16px,4vw,48px) 18px;
+    border-bottom:3px solid var(--ink);
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  header h1{
+    margin:0;
+    font-size:clamp(1.5rem,3vw,2.1rem);
+    font-weight:700;
+    letter-spacing:-0.01em;
+  }
+  header .sub{
+    font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+    font-size:0.72rem;
+    text-transform:uppercase;
+    letter-spacing:0.12em;
+    color:var(--ink-soft);
+    margin-top:4px;
+  }
+  #recordStamp{
+    font-family:'IBM Plex Mono','SFMono-Regular',Consolas,monospace;
+    font-size:0.78rem;
+    color:var(--ink-soft);
+    text-align:right;
+  }
+  #recordStamp b{ color:var(--ink); font-size:1.1rem; }
+
+  main{ padding:20px clamp(16px,4vw,48px) 60px; max-width:1600px; margin:0 auto; }
+
+  /* --- Upload state --- */
+  #dropzone{
+    border:2px dashed var(--line);
+    background:var(--panel);
+    border-radius:2px;
+    padding:56px 24px;
+    text-align:center;
+    margin-top:24px;
+    cursor:pointer;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  #dropzone.drag{ border-color:var(--accent-soft); background:#fdf6f0; }
+  #dropzone p{ margin:6px 0; color:var(--ink-soft); }
+  #dropzone .big{ font-size:1.15rem; color:var(--ink); font-weight:600; font-family:inherit; }
+  #dropzone input{ display:none; }
+  #dropzone .browse{
+    display:inline-block;
+    margin-top:14px;
+    padding:9px 20px;
+    background:var(--ink);
+    color:#fff;
+    border-radius:2px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.78rem;
+    letter-spacing:0.05em;
+    text-transform:uppercase;
+  }
+  #loadStatus{
+    margin-top:14px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.8rem;
+    color:var(--accent);
+    min-height:1.2em;
+  }
+
+  /* --- Controls --- */
+  #controls{
+    display:none;
+    background:var(--panel);
+    border:1px solid var(--line);
+    border-top:3px solid var(--ink);
+    padding:18px 20px;
+    margin-top:22px;
+    gap:16px;
+    flex-wrap:wrap;
+    align-items:flex-end;
+  }
+  .field{ display:flex; flex-direction:column; gap:6px; min-width:170px; flex:1 1 170px; }
+  .field.wide{ flex:2 1 260px; }
+  .field label{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.68rem;
+    text-transform:uppercase;
+    letter-spacing:0.09em;
+    color:var(--ink-soft);
+  }
+  select, input[type=text]{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.85rem;
+    padding:9px 10px;
+    border:1px solid var(--line);
+    border-radius:2px;
+    background:#fff;
+    color:var(--ink);
+  }
+  select:focus, input:focus{ outline:2px solid var(--focus); outline-offset:1px; }
+  #resetBtn, #exportBtn, #newFileBtn{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.72rem;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    padding:9px 14px;
+    border:1px solid var(--ink);
+    background:#fff;
+    color:var(--ink);
+    border-radius:2px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  #exportBtn{ background:var(--ink); color:#fff; }
+  #resetBtn:hover, #exportBtn:hover, #newFileBtn:hover{ background:var(--accent-soft); color:#fff; border-color:var(--accent-soft); }
+
+  #meta{
+    display:none;
+    margin-top:16px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.78rem;
+    color:var(--ink-soft);
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+  #meta .count b{ color:var(--accent); font-size:1rem; }
+  #renderCapNotice{ display:none; color:var(--warn); }
+
+  /* --- Table --- */
+  #tableWrap{
+    display:none;
+    margin-top:12px;
+    border:1px solid var(--line);
+    background:var(--panel);
+    overflow:auto;
+    max-height:70vh;
+  }
+  table{ border-collapse:collapse; width:100%; font-size:0.82rem; }
+  thead th{
+    position:sticky; top:0;
+    background:var(--ink);
+    color:#f5f3ee;
+    text-align:left;
+    padding:10px 12px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.68rem;
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    cursor:pointer;
+    user-select:none;
+    white-space:nowrap;
+    border-right:1px solid #3a3428;
+  }
+  thead th:hover{ background:var(--accent); }
+  thead th .arrow{ opacity:0.5; margin-left:4px; font-size:0.7em; }
+  thead th.sorted .arrow{ opacity:1; }
+  tbody td{
+    padding:8px 12px;
+    border-bottom:1px solid var(--stripe);
+    white-space:nowrap;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.8rem;
+  }
+  tbody tr:nth-child(even){ background:var(--stripe); }
+  tbody tr:hover{ background:#f3e6de; }
+  td.name{ font-family:inherit; font-weight:600; }
+  .badge{
+    display:inline-block;
+    padding:1px 7px;
+    border-radius:9px;
+    font-size:0.7rem;
+    font-weight:600;
+  }
+  .badge.ontime{ background:#e3f0e5; color:var(--ok); }
+  .badge.late{ background:#fbeee0; color:var(--warn); }
+  .badge.missing, .badge.nonsub{ background:#f6dede; color:var(--bad); }
+  .badge.other{ background:#e9e6dc; color:var(--ink-soft); }
+
+  #emptyState{
+    display:none;
+    text-align:center;
+    padding:50px 20px;
+    color:var(--ink-soft);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.85rem;
+  }
+
+  footer{
+    text-align:center;
+    padding:18px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.68rem;
+    color:var(--ink-soft);
+  }
+
+  /* --- Cross-check section --- */
+  #crossCheck{
+    display:none;
+    margin-top:34px;
+    border-top:3px solid var(--ink);
+    padding-top:18px;
+  }
+  #crossCheck h2{
+    margin:0 0 4px;
+    font-size:1.2rem;
+  }
+  #crossCheck .ccsub{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.72rem;
+    color:var(--ink-soft);
+    margin-bottom:16px;
+  }
+  #ccUploadRow{
+    display:flex;
+    gap:14px;
+    align-items:center;
+    flex-wrap:wrap;
+    background:var(--panel);
+    border:1px solid var(--line);
+    padding:14px 16px;
+  }
+  #ccUploadRow label.browse2{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.72rem;
+    text-transform:uppercase;
+    letter-spacing:0.05em;
+    padding:8px 16px;
+    background:var(--ink);
+    color:#fff;
+    border-radius:2px;
+    cursor:pointer;
+  }
+  #ccUploadRow input[type=file]{ display:none; }
+  #ccFileStatus{ font-family:'IBM Plex Mono',monospace; font-size:0.78rem; color:var(--ink-soft); }
+  #ccMapping{
+    display:none;
+    margin-top:14px;
+    background:var(--panel);
+    border:1px solid var(--line);
+    padding:16px;
+    gap:14px;
+    flex-wrap:wrap;
+    align-items:flex-end;
+  }
+  #ccUnitNotice, #ccColumnNotice, #ccMatchWarning{
+    display:none;
+    margin-top:14px;
+    padding:12px 16px;
+    background:#fbeee0;
+    border:1px solid var(--accent-soft);
+    color:var(--warn);
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.8rem;
+  }
+  #ccMatchWarning.severe{ background:#f6dede; border-color:var(--bad); color:var(--bad); }
+  #ccSummary{
+    display:none;
+    margin-top:16px;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:0.8rem;
+    color:var(--ink-soft);
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:10px;
+    align-items:center;
+  }
+  #ccSummary .stats span{ margin-right:16px; }
+  #ccSummary .stats b{ color:var(--ink); }
+  #ccSummary .stats b.mismatch{ color:var(--bad); }
+  #ccSummary .stats b.missing{ color:var(--warn); }
+  #ccTableWrap{
+    display:none;
+    margin-top:10px;
+    border:1px solid var(--line);
+    background:var(--panel);
+    overflow:auto;
+    max-height:60vh;
+  }
+  .badge.match{ background:#e3f0e5; color:var(--ok); }
+  .badge.mismatch{ background:#f6dede; color:var(--bad); }
+  .badge.missingres{ background:#fbeee0; color:var(--warn); }
+  .badge.missingcw{ background:#e6e9f6; color:#39498f; }
+
+  @media (max-width:640px){
+    tbody td, thead th{ font-size:0.72rem; padding:6px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Checking Window</h1>
+    <div class="sub">Assessment record lookup</div>
+  </div>
+  <div id="recordStamp"></div>
+</header>
+
+<main>
+
+  <div id="dropzone">
+    <p class="big">Drop the Checking Window spreadsheet here</p>
+    <p>or</p>
+    <label class="browse" for="fileInput">Choose file</label>
+    <input type="file" id="fileInput" accept=".xlsx,.xls">
+    <p id="loadStatus"></p>
+  </div>
+
+  <div id="controls">
+    <div class="field">
+      <label for="fDept">Department / sheet</label>
+      <select id="fDept"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="fYear">Academic year</label>
+      <select id="fYear"><option value="">All</option></select>
+    </div>
+    <div class="field">
+      <label for="fYos">Year of study</label>
+      <select id="fYos"><option value="">All</option></select>
+    </div>
+    <div class="field wide">
+      <label for="fCourse">Unit / course title</label>
+      <select id="fCourse"><option value="">All</option></select>
+    </div>
+    <div class="field wide">
+      <label for="fStudent">Student name or MMU ID</label>
+      <input type="text" id="fStudent" placeholder="Search…">
+    </div>
+    <button id="resetBtn" type="button">Clear filters</button>
+    <button id="exportBtn" type="button">Export CSV</button>
+    <button id="newFileBtn" type="button">Load new file</button>
+  </div>
+
+  <div id="meta">
+    <div class="count">Showing <b id="countShown">0</b> of <span id="countTotal">0</span> rows · <span id="countStudents">0</span> students</div>
+    <div id="renderCapNotice"></div>
+    <div id="sortHint">Click a column heading to sort</div>
+  </div>
+
+  <div id="tableWrap">
+    <table>
+      <thead><tr id="headRow"></tr></thead>
+      <tbody id="bodyRows"></tbody>
+    </table>
+  </div>
+
+  <div id="emptyState">No rows match the current filters.</div>
+
+  <section id="crossCheck">
+    <h2>Cross-check against a results file</h2>
+    <div class="ccsub">Load a second spreadsheet, tell it which columns hold MMU ID and mark, then pick a unit above to compare.</div>
+
+    <div id="ccUploadRow">
+      <label class="browse2" for="ccFileInput">Load results file</label>
+      <input type="file" id="ccFileInput" accept=".xlsx,.xls">
+      <div class="field" id="ccSheetField" style="display:none;min-width:200px;">
+        <label for="ccSheet">Sheet</label>
+        <select id="ccSheet"></select>
+      </div>
+      <span id="ccFileStatus">No results file loaded yet.</span>
+    </div>
+
+    <div id="ccMapping">
+      <div class="field">
+        <label for="ccColId">MMU ID column</label>
+        <select id="ccColId"></select>
+      </div>
+      <div class="field">
+        <label for="ccColMark">Mark column</label>
+        <select id="ccColMark"></select>
+      </div>
+      <div class="field">
+        <label for="ccColName">Name column (optional, for unmatched rows)</label>
+        <select id="ccColName"><option value="">— not mapped —</option></select>
+      </div>
+      <div class="field">
+        <label for="ccColUnit">Unit column (if file has several units)</label>
+        <select id="ccColUnit"><option value="">— single unit in this file —</option></select>
+      </div>
+      <div class="field" id="ccUnitValueField" style="display:none;">
+        <label for="ccUnitValue">Value matching the unit selected above</label>
+        <select id="ccUnitValue"></select>
+      </div>
+      <div class="field">
+        <label for="ccCompareField">Compare results mark against</label>
+        <select id="ccCompareField">
+          <option value="mark">Assessment Component Mark</option>
+          <option value="coursemark">Course Mark (final)</option>
+        </select>
+      </div>
+      <div class="field" id="ccComponentField" style="display:none;">
+        <label for="ccComponent">Which assessment component (this unit has more than one)</label>
+        <select id="ccComponent"></select>
+      </div>
+      <div class="field" style="min-width:110px;">
+        <label for="ccTolerance">Tolerance (±)</label>
+        <input type="text" id="ccTolerance" value="0" inputmode="decimal">
+      </div>
+      <button id="ccExportBtn" type="button" style="font-family:'IBM Plex Mono',monospace;font-size:0.72rem;text-transform:uppercase;letter-spacing:0.06em;padding:9px 14px;border:1px solid var(--ink);background:#fff;color:var(--ink);border-radius:2px;cursor:pointer;">Export cross-check CSV</button>
+    </div>
+
+    <div id="ccUnitNotice">Select a specific unit / course title in the filters above to run the cross-check.</div>
+    <div id="ccColumnNotice">Select the MMU ID and Mark columns above to run the cross-check — they couldn't be guessed with confidence, so nothing is selected yet.</div>
+    <div id="ccMatchWarning"></div>
+
+    <div id="ccSummary">
+      <div class="stats">
+        <span>Matched: <b id="ccMatched">0</b></span>
+        <span>Mismatched: <b class="mismatch" id="ccMismatched">0</b></span>
+        <span>Missing in results file: <b class="missing" id="ccMissingRes">0</b></span>
+        <span>Missing in Checking Window: <b class="missing" id="ccMissingCw">0</b></span>
+      </div>
+    </div>
+
+    <div id="ccTableWrap">
+      <table>
+        <thead><tr>
+          <th>Surname</th><th>Forename</th><th>MMU ID</th><th>Results File Name</th>
+          <th>Checking Window Mark</th><th>Results File Mark</th><th>Diff</th><th>Status</th>
+        </tr></thead>
+        <tbody id="ccBodyRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<footer>Runs entirely in your browser — the spreadsheet is never uploaded anywhere.</footer>
+
+<script>
+(function(){
+
+  // ---------- Column model ----------
+  // canonical key -> display label
+  var COLUMNS = [
+    ["surname",   "Surname"],
+    ["forename",  "Forename"],
+    ["mmuid",     "MMU ID"],
+    ["dept",      "Department/Sheet"],
+    ["ayear",     "Academic Year"],
+    ["yos",       "Year of Study"],
+    ["programme", "Programme Curriculum"],
+    ["coursecode","Course Code"],
+    ["coursetitle","Course Title"],
+    ["assessdesc","Assessment Component"],
+    ["attempt",   "Attempt"],
+    ["substatus", "Submission Status"],
+    ["deadline",  "Personal Deadline"],
+    ["mark",      "Component Mark"],
+    ["grade",     "Letter Grade"],
+    ["coursemark","Course Mark"],
+    ["outcome",   "Board Outcome"]
+  ];
+
+  // raw header name (lowercased, trimmed) -> canonical key
+  var ALIASES = {
+    "surname":"surname",
+    "forename":"forename",
+    "module":"forename", // seen mislabeled in one sheet, same column position as forename
+    "mmu id":"mmuid",
+    "academic year":"ayear",
+    "year of study":"yos",
+    "programme curriculum":"programme",
+    "course code":"coursecode",
+    "course title":"coursetitle",
+    "assessment component description":"assessdesc",
+    "attempt":"attempt",
+    "ok":"attempt", // seen in place of Attempt in one sheet
+    "assessment submission status":"substatus",
+    "personal deadline":"deadline",
+    "assessment component mark":"mark",
+    "assessment component letter grade":"grade",
+    "course mark":"coursemark",
+    "board outcome":"outcome"
+  };
+
+  var allRows = [];
+  var currentRows = [];
+  var sortKey = null, sortDir = 1;
+  var RENDER_CAP = 2000; // cap DOM rows for responsiveness; filtering/sorting/export still cover the full set
+
+  var dropzone = document.getElementById('dropzone');
+  var fileInput = document.getElementById('fileInput');
+  var loadStatus = document.getElementById('loadStatus');
+  var controls = document.getElementById('controls');
+  var meta = document.getElementById('meta');
+  var tableWrap = document.getElementById('tableWrap');
+  var emptyState = document.getElementById('emptyState');
+  var headRow = document.getElementById('headRow');
+  var bodyRows = document.getElementById('bodyRows');
+  var recordStamp = document.getElementById('recordStamp');
+
+  ['dragenter','dragover'].forEach(function(ev){
+    dropzone.addEventListener(ev, function(e){ e.preventDefault(); dropzone.classList.add('drag'); });
+  });
+  ['dragleave','drop'].forEach(function(ev){
+    dropzone.addEventListener(ev, function(e){ e.preventDefault(); dropzone.classList.remove('drag'); });
+  });
+  dropzone.addEventListener('drop', function(e){
+    var f = e.dataTransfer.files[0];
+    if(f) handleFile(f);
+  });
+  dropzone.addEventListener('click', function(e){
+    if(e.target.tagName !== 'INPUT') fileInput.click();
+  });
+  fileInput.addEventListener('change', function(){
+    if(fileInput.files[0]) handleFile(fileInput.files[0]);
+  });
+
+  document.getElementById('newFileBtn').addEventListener('click', function(){
+    allRows = []; currentRows = [];
+    fileInput.value = '';
+    controls.style.display = 'none';
+    meta.style.display = 'none';
+    tableWrap.style.display = 'none';
+    emptyState.style.display = 'none';
+    recordStamp.textContent = '';
+    loadStatus.textContent = '';
+    dropzone.style.display = 'block';
+    document.getElementById('crossCheck').style.display = 'none';
+    resetCrossCheck();
+  });
+
+  function handleFile(file){
+    loadStatus.textContent = 'Reading ' + file.name + ' …';
+    var reader = new FileReader();
+    reader.onerror = function(){ loadStatus.textContent = 'Could not read that file.'; };
+    reader.onload = function(e){
+      try{
+        var wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        ingestWorkbook(wb);
+      }catch(err){
+        loadStatus.textContent = 'Error parsing spreadsheet: ' + err.message;
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function normHeader(h){
+    return String(h==null?'':h).trim().toLowerCase();
+  }
+
+  function ingestWorkbook(wb){
+    allRows = [];
+    var sheetsUsed = 0;
+    wb.SheetNames.forEach(function(sheetName){
+      var ws = wb.Sheets[sheetName];
+      var json = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
+      if(!json.length) return;
+      var rawHeaders = json[0];
+      if(!rawHeaders || !rawHeaders.length) return;
+      var colMap = {}; // column index -> canonical key
+      rawHeaders.forEach(function(h, idx){
+        var key = ALIASES[normHeader(h)];
+        if(key) colMap[idx] = key;
+      });
+      // require at least a name/id column to treat this as a data sheet
+      var vals = Object.keys(colMap).map(function(i){return colMap[i];});
+      if(vals.indexOf('mmuid') === -1) return;
+      sheetsUsed++;
+      for(var r=1;r<json.length;r++){
+        var row = json[r];
+        if(!row || !row.length) continue;
+        var rec = {dept: sheetName};
+        Object.keys(colMap).forEach(function(idx){
+          var key = colMap[idx];
+          var v = row[idx];
+          if(v instanceof Date){
+            v = v.toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'}) +
+                ' ' + v.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+          }
+          rec[key] = (v===undefined||v===null) ? '' : v;
+        });
+        // skip fully blank rows
+        if(!rec.mmuid && !rec.surname) continue;
+        allRows.push(rec);
+      }
+    });
+
+    if(!allRows.length){
+      loadStatus.textContent = 'No recognisable assessment rows found in that file — check it matches the Checking Window layout.';
+      return;
+    }
+
+    loadStatus.textContent = '';
+    dropzone.style.display = 'none';
+    buildFilters();
+    controls.style.display = 'flex';
+    meta.style.display = 'flex';
+    buildHead();
+    applyFilters();
+    recordStamp.innerHTML = '<b>' + allRows.length.toLocaleString() + '</b> assessment rows loaded from ' + sheetsUsed + ' sheet' + (sheetsUsed===1?'':'s');
+    document.getElementById('crossCheck').style.display = 'block';
+  }
+
+  function uniqueSorted(field){
+    var s = {};
+    allRows.forEach(function(r){ var v = r[field]; if(v!=='' && v!=null) s[v]=true; });
+    return Object.keys(s).sort(function(a,b){ return String(a).localeCompare(String(b)); });
+  }
+
+  function fillSelect(sel, values){
+    var current = sel.value;
+    sel.innerHTML = '<option value="">All</option>';
+    values.forEach(function(v){
+      var o = document.createElement('option');
+      o.value = v; o.textContent = v;
+      sel.appendChild(o);
+    });
+    if(values.indexOf(current) !== -1) sel.value = current;
+  }
+
+  var fDept = document.getElementById('fDept');
+  var fYear = document.getElementById('fYear');
+  var fYos = document.getElementById('fYos');
+  var fCourse = document.getElementById('fCourse');
+  var fStudent = document.getElementById('fStudent');
+
+  function buildFilters(){
+    fillSelect(fDept, uniqueSorted('dept'));
+    fillSelect(fYear, uniqueSorted('ayear'));
+    fillSelect(fYos, uniqueSorted('yos'));
+    fillSelect(fCourse, uniqueSorted('coursetitle'));
+  }
+
+  [fDept, fYear, fYos, fCourse].forEach(function(el){
+    el.addEventListener('change', applyFilters);
+  });
+  fStudent.addEventListener('input', debounce(applyFilters, 150));
+
+  function debounce(fn, ms){
+    var t;
+    return function(){
+      clearTimeout(t);
+      var args = arguments;
+      t = setTimeout(function(){ fn.apply(null,args); }, ms);
+    };
+  }
+
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    fDept.value=''; fYear.value=''; fYos.value=''; fCourse.value=''; fStudent.value='';
+    applyFilters();
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', function(){
+    exportCSV(currentRows);
+  });
+
+  function applyFilters(){
+    var dept = fDept.value, year = fYear.value, yos = fYos.value, course = fCourse.value;
+    var q = fStudent.value.trim().toLowerCase();
+
+    currentRows = allRows.filter(function(r){
+      if(dept && r.dept !== dept) return false;
+      if(year && r.ayear !== year) return false;
+      if(yos && r.yos !== yos) return false;
+      if(course && r.coursetitle !== course) return false;
+      if(q){
+        var full = ((r.forename||'')+' '+(r.surname||'')).toLowerCase();
+        var idStr = String(r.mmuid||'').toLowerCase();
+        if(full.indexOf(q)===-1 && idStr.indexOf(q)===-1) return false;
+      }
+      return true;
+    });
+
+    if(sortKey) sortRows();
+    render();
+    updateCrossCheck();
+  }
+
+  function buildHead(){
+    headRow.innerHTML = '';
+    COLUMNS.forEach(function(col){
+      var th = document.createElement('th');
+      th.dataset.key = col[0];
+      th.innerHTML = col[1] + '<span class="arrow">↕</span>';
+      th.addEventListener('click', function(){
+        if(sortKey === col[0]){ sortDir *= -1; } else { sortKey = col[0]; sortDir = 1; }
+        sortRows();
+        render();
+      });
+      headRow.appendChild(th);
+    });
+  }
+
+  function sortRows(){
+    var key = sortKey, dir = sortDir;
+    currentRows.sort(function(a,b){
+      var av = a[key], bv = b[key];
+      var an = parseFloat(av), bn = parseFloat(bv);
+      var bothNum = !isNaN(an) && !isNaN(bn) && av!=='' && bv!=='';
+      if(bothNum){ return (an-bn)*dir; }
+      av = String(av==null?'':av).toLowerCase();
+      bv = String(bv==null?'':bv).toLowerCase();
+      if(av<bv) return -1*dir;
+      if(av>bv) return 1*dir;
+      return 0;
+    });
+  }
+
+  function statusBadgeClass(status){
+    var s = String(status||'').toLowerCase();
+    if(s.indexOf('on time')!==-1) return 'ontime';
+    if(s.indexOf('late')!==-1) return 'late';
+    if(s.indexOf('non')!==-1 || s.indexOf('missing')!==-1) return 'missing';
+    return 'other';
+  }
+
+  function render(){
+    // header sort indicators
+    Array.prototype.forEach.call(headRow.children, function(th){
+      th.classList.toggle('sorted', th.dataset.key === sortKey);
+      var arrow = th.querySelector('.arrow');
+      if(th.dataset.key === sortKey){
+        arrow.textContent = sortDir===1 ? '↑' : '↓';
+      } else {
+        arrow.textContent = '↕';
+      }
+    });
+
+    bodyRows.innerHTML = '';
+    var frag = document.createDocumentFragment();
+    var rowsToRender = currentRows.length > RENDER_CAP ? currentRows.slice(0, RENDER_CAP) : currentRows;
+    rowsToRender.forEach(function(r){
+      var tr = document.createElement('tr');
+      COLUMNS.forEach(function(col){
+        var td = document.createElement('td');
+        var key = col[0];
+        var v = r[key];
+        if(key === 'surname'){ td.className='name'; td.textContent = (v||'') ; }
+        else if(key === 'substatus'){
+          var badge = document.createElement('span');
+          badge.className = 'badge ' + statusBadgeClass(v);
+          badge.textContent = v || '—';
+          td.appendChild(badge);
+        } else {
+          td.textContent = (v===''||v==null) ? '—' : v;
+        }
+        tr.appendChild(td);
+      });
+      frag.appendChild(tr);
+    });
+    bodyRows.appendChild(frag);
+
+    var renderCapNotice = document.getElementById('renderCapNotice');
+    if(currentRows.length > RENDER_CAP){
+      renderCapNotice.textContent = 'Displaying the first ' + RENDER_CAP.toLocaleString() + ' of ' + currentRows.length.toLocaleString() + ' matching rows — narrow the filters above to browse the rest (CSV export always includes all of them).';
+      renderCapNotice.style.display = 'block';
+    } else {
+      renderCapNotice.style.display = 'none';
+    }
+
+    tableWrap.style.display = currentRows.length ? 'block' : 'none';
+    emptyState.style.display = currentRows.length ? 'none' : 'block';
+
+    document.getElementById('countShown').textContent = currentRows.length.toLocaleString();
+    document.getElementById('countTotal').textContent = allRows.length.toLocaleString();
+    var studentSet = {};
+    currentRows.forEach(function(r){ studentSet[r.mmuid]=true; });
+    document.getElementById('countStudents').textContent = Object.keys(studentSet).length.toLocaleString();
+  }
+
+  function exportCSV(rows){
+    if(!rows.length) return;
+    var lines = [COLUMNS.map(function(c){return csvEscape(c[1]);}).join(',')];
+    rows.forEach(function(r){
+      lines.push(COLUMNS.map(function(c){ return csvEscape(r[c[0]]); }).join(','));
+    });
+    var blob = new Blob([lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'checking-window-export.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+  function csvEscape(v){
+    v = (v===undefined||v===null) ? '' : String(v);
+    if(/[",\n\r]/.test(v)) v = '"' + v.replace(/"/g,'""') + '"';
+    return v;
+  }
+
+  // ---------- Cross-check against a results file ----------
+  var extWB = null;
+  var extAOA = [];       // rows for the currently selected sheet, header at index 0
+  var ccFileInput = document.getElementById('ccFileInput');
+  var ccSheetField = document.getElementById('ccSheetField');
+  var ccSheet = document.getElementById('ccSheet');
+  var ccFileStatus = document.getElementById('ccFileStatus');
+  var ccMapping = document.getElementById('ccMapping');
+  var ccColId = document.getElementById('ccColId');
+  var ccColMark = document.getElementById('ccColMark');
+  var ccColName = document.getElementById('ccColName');
+  var ccColUnit = document.getElementById('ccColUnit');
+  var ccUnitValueField = document.getElementById('ccUnitValueField');
+  var ccUnitValue = document.getElementById('ccUnitValue');
+  var ccCompareField = document.getElementById('ccCompareField');
+  var ccComponentField = document.getElementById('ccComponentField');
+  var ccComponent = document.getElementById('ccComponent');
+  var ccTolerance = document.getElementById('ccTolerance');
+  var ccUnitNotice = document.getElementById('ccUnitNotice');
+  var ccSummary = document.getElementById('ccSummary');
+  var ccTableWrap = document.getElementById('ccTableWrap');
+  var ccBodyRows = document.getElementById('ccBodyRows');
+
+  ccFileInput.addEventListener('change', function(){
+    if(ccFileInput.files[0]) handleResultsFile(ccFileInput.files[0]);
+  });
+
+  function handleResultsFile(file){
+    ccFileStatus.textContent = 'Reading ' + file.name + ' …';
+    var reader = new FileReader();
+    reader.onerror = function(){ ccFileStatus.textContent = 'Could not read that file.'; };
+    reader.onload = function(e){
+      try{
+        extWB = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        if(extWB.SheetNames.length > 1){
+          ccSheetField.style.display = 'flex';
+          ccSheet.innerHTML = '';
+          extWB.SheetNames.forEach(function(sn){
+            var o = document.createElement('option'); o.value = sn; o.textContent = sn;
+            ccSheet.appendChild(o);
+          });
+        } else {
+          ccSheetField.style.display = 'none';
+        }
+        loadResultsSheet(extWB.SheetNames[0]);
+        ccFileStatus.textContent = file.name + ' loaded.';
+      }catch(err){
+        ccFileStatus.textContent = 'Error parsing results file: ' + err.message;
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  ccSheet.addEventListener('change', function(){ loadResultsSheet(ccSheet.value); });
+
+  function loadResultsSheet(sheetName){
+    var ws = extWB.Sheets[sheetName];
+    extAOA = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
+    if(!extAOA.length){
+      ccFileStatus.textContent = 'That sheet looks empty.';
+      ccMapping.style.display = 'none';
+      return;
+    }
+    var headers = extAOA[0];
+    [ccColId, ccColMark].forEach(function(sel){ sel.innerHTML = '<option value="">— select column —</option>'; });
+    ccColName.innerHTML = '<option value="">— not mapped —</option>';
+    ccColUnit.innerHTML = '<option value="">— single unit in this file —</option>';
+    headers.forEach(function(h, idx){
+      var label = (h===''||h==null) ? ('Column ' + (idx+1)) : String(h);
+      [ccColId, ccColMark].forEach(function(sel){
+        var o = document.createElement('option'); o.value = idx; o.textContent = label;
+        sel.appendChild(o);
+      });
+      [ccColName, ccColUnit].forEach(function(sel){
+        var o = document.createElement('option'); o.value = idx; o.textContent = label;
+        sel.appendChild(o);
+      });
+    });
+    // best-effort auto-guess: prefer non-assessor columns first, since exports often
+    // carry both a marker's own username/grade and the student's — the latter is what we want.
+    // Keeps the FIRST matching column, not the last — export layouts tend to put the primary
+    // field (e.g. "Assessment Component Mark") before secondary/annotation columns further along
+    // (e.g. "Grade Conditions"), and a broad fallback pattern can otherwise match several columns.
+    function guessColumn(patterns, preferNonAssessor){
+      var found = '';
+      headers.forEach(function(h, idx){
+        if(found !== '') return;
+        var hn = normHeader(h);
+        if(preferNonAssessor && /assessor/.test(hn)) return;
+        if(patterns.test(hn)) found = idx;
+      });
+      return found;
+    }
+    var idGuess = guessColumn(/mmu id|^mmu$|username|student.*id|^id$/, true);
+    if(idGuess === '') idGuess = guessColumn(/mmu id|^mmu$|username|student.*id|^id$/, false);
+    if(idGuess !== '') ccColId.value = idGuess;
+
+    var markGuess = guessColumn(/provisional|final grade|final mark|^mark$|^grade$|score|result/, true);
+    if(markGuess === '') markGuess = guessColumn(/mark|grade/, false);
+    if(markGuess !== '') ccColMark.value = markGuess;
+
+    var nameGuess = guessColumn(/surname|last name|^name$|full name|student name/, true);
+    if(nameGuess !== '') ccColName.value = nameGuess;
+
+    var unitGuess = guessColumn(/unit|course|module/, false);
+    if(unitGuess !== '') ccColUnit.value = unitGuess;
+
+    ccMapping.style.display = 'flex';
+    updateUnitValueOptions();
+    updateCrossCheck();
+  }
+
+  function updateUnitValueOptions(){
+    if(ccColUnit.value === ''){
+      ccUnitValueField.style.display = 'none';
+      return;
+    }
+    ccUnitValueField.style.display = 'flex';
+    var idx = parseInt(ccColUnit.value, 10);
+    var seen = {}; var vals = [];
+    for(var r=1;r<extAOA.length;r++){
+      var v = extAOA[r][idx];
+      if(v==='' || v==null) continue;
+      v = String(v).trim();
+      if(!seen[v]){ seen[v]=true; vals.push(v); }
+    }
+    vals.sort(function(a,b){return a.localeCompare(b);});
+    var current = ccUnitValue.value;
+    ccUnitValue.innerHTML = '';
+    vals.forEach(function(v){
+      var o = document.createElement('option'); o.value=v; o.textContent=v;
+      ccUnitValue.appendChild(o);
+    });
+    // try to preselect a value matching the currently chosen unit title
+    if(vals.indexOf(current) !== -1){
+      ccUnitValue.value = current;
+    } else if(fCourse.value){
+      var guess = vals.find(function(v){ return v.toLowerCase() === fCourse.value.toLowerCase(); });
+      if(guess) ccUnitValue.value = guess;
+    }
+  }
+
+  [ccColId, ccColMark, ccColName, ccCompareField, ccTolerance].forEach(function(el){
+    el.addEventListener('change', updateCrossCheck);
+  });
+  ccTolerance.addEventListener('input', debounce(updateCrossCheck, 200));
+  ccColUnit.addEventListener('change', function(){ updateUnitValueOptions(); updateCrossCheck(); });
+  ccUnitValue.addEventListener('change', updateCrossCheck);
+  ccCompareField.addEventListener('change', function(){ updateComponentOptions(); updateCrossCheck(); });
+  ccComponent.addEventListener('change', updateCrossCheck);
+
+  function updateComponentOptions(){
+    if(ccCompareField.value !== 'mark' || !fCourse.value){
+      ccComponentField.style.display = 'none';
+      return;
+    }
+    var seen = {}; var vals = [];
+    allRows.forEach(function(rec){
+      if(fDept.value && rec.dept !== fDept.value) return;
+      if(fYear.value && rec.ayear !== fYear.value) return;
+      if(fYos.value && rec.yos !== fYos.value) return;
+      if(rec.coursetitle !== fCourse.value) return;
+      var v = rec.assessdesc;
+      if(v==='' || v==null) return;
+      if(!seen[v]){ seen[v]=true; vals.push(v); }
+    });
+    vals.sort(function(a,b){return a.localeCompare(b);});
+    if(vals.length <= 1){
+      ccComponentField.style.display = 'none';
+      return;
+    }
+    var current = ccComponent.value;
+    ccComponent.innerHTML = '';
+    vals.forEach(function(v){
+      var o = document.createElement('option'); o.value=v; o.textContent=v;
+      ccComponent.appendChild(o);
+    });
+    if(vals.indexOf(current) !== -1) ccComponent.value = current;
+    ccComponentField.style.display = 'flex';
+  }
+
+  // "F" = first sit, "R1"/"R2"/... = resits — a higher number always supersedes the original attempt.
+  function attemptRank(a){
+    a = String(a==null?'':a).trim().toUpperCase();
+    var m = /^R(\d+)$/.exec(a);
+    if(m) return 1 + parseInt(m[1], 10);
+    return 0;
+  }
+
+  function normalizeId(v){
+    if(v===undefined||v===null) return '';
+    var s = String(v).trim();
+    var at = s.indexOf('@');
+    if(at !== -1) s = s.substring(0, at);   // e.g. 23624406@stu.mmu.ac.uk -> 23624406
+    s = s.replace(/\.0+$/,'');              // numeric-parse artifact e.g. 23634558.0
+    s = s.replace(/^0+(?=\d)/,'');          // ignore leading zeros
+    return s.toLowerCase();
+  }
+
+  var ccColumnNotice = document.getElementById('ccColumnNotice');
+  var ccMatchWarning = document.getElementById('ccMatchWarning');
+
+  function resetCrossCheck(){
+    extWB = null; extAOA = [];
+    ccFileInput.value = '';
+    ccFileStatus.textContent = 'No results file loaded yet.';
+    ccMapping.style.display = 'none';
+    ccSheetField.style.display = 'none';
+    ccComponentField.style.display = 'none';
+    ccSummary.style.display = 'none';
+    ccTableWrap.style.display = 'none';
+    ccUnitNotice.style.display = 'none';
+    ccColumnNotice.style.display = 'none';
+    ccMatchWarning.style.display = 'none';
+    ccBodyRows.innerHTML = '';
+  }
+
+  var lastCrossCheckRows = [];
+
+  function updateCrossCheck(){
+    if(!extAOA.length || ccMapping.style.display === 'none'){
+      ccSummary.style.display = 'none';
+      ccTableWrap.style.display = 'none';
+      ccColumnNotice.style.display = 'none';
+      return;
+    }
+    if(!fCourse.value){
+      ccUnitNotice.style.display = 'block';
+      ccSummary.style.display = 'none';
+      ccTableWrap.style.display = 'none';
+      ccColumnNotice.style.display = 'none';
+      return;
+    }
+    ccUnitNotice.style.display = 'none';
+    updateComponentOptions();
+
+    var idIdx = ccColId.value === '' ? -1 : parseInt(ccColId.value,10);
+    var markIdx = ccColMark.value === '' ? -1 : parseInt(ccColMark.value,10);
+    if(idIdx === -1 || markIdx === -1){
+      ccColumnNotice.style.display = 'block';
+      ccSummary.style.display = 'none';
+      ccTableWrap.style.display = 'none';
+      return;
+    }
+    ccColumnNotice.style.display = 'none';
+    var nameIdx = ccColName.value === '' ? -1 : parseInt(ccColName.value,10);
+    var unitIdx = ccColUnit.value === '' ? null : parseInt(ccColUnit.value,10);
+    var unitVal = ccUnitValue.value;
+    var tolerance = parseFloat(ccTolerance.value); if(isNaN(tolerance)) tolerance = 0;
+    var compareField = ccCompareField.value;
+    var componentVal = (compareField === 'mark' && ccComponentField.style.display !== 'none') ? ccComponent.value : null;
+
+    // external side: map normalized MMU ID -> {raw, mark, name, dup}
+    var extMap = {};
+    for(var r=1;r<extAOA.length;r++){
+      var row = extAOA[r];
+      if(!row || !row.length) continue;
+      if(unitIdx !== null){
+        var uv = row[unitIdx];
+        if(String(uv==null?'':uv).trim() !== unitVal) continue;
+      }
+      var rawId = row[idIdx];
+      if(rawId===''||rawId==null) continue;
+      var key = normalizeId(rawId);
+      if(!key) continue;
+      var markVal = row[markIdx];
+      var nameVal = nameIdx === -1 ? '' : row[nameIdx];
+      if(extMap[key]){
+        extMap[key].dup = true;
+      } else {
+        extMap[key] = {rawId: rawId, mark: markVal, name: nameVal, dup:false};
+      }
+    }
+
+    // main side: students in the currently selected unit (respecting dept/year/yos/course, not the name search box)
+    // A student can have more than one row for the same unit/component — most often a first sit ("F")
+    // plus one or more resits ("R1", "R2", ...). The resit supersedes the original attempt, so when a
+    // student has multiple rows here we keep the highest-ranked attempt rather than whichever row the
+    // sheet happens to list first. If two rows share the same attempt but disagree on the mark, that's a
+    // genuine data-quality anomaly, not something to silently resolve — flag it the same way a duplicate
+    // row in the results file gets flagged.
+    var mainMap = {};
+    allRows.forEach(function(rec){
+      if(fDept.value && rec.dept !== fDept.value) return;
+      if(fYear.value && rec.ayear !== fYear.value) return;
+      if(fYos.value && rec.yos !== fYos.value) return;
+      if(rec.coursetitle !== fCourse.value) return;
+      if(componentVal && rec.assessdesc !== componentVal) return;
+      var key = normalizeId(rec.mmuid);
+      if(!key) return;
+      var mark = rec[compareField];
+      var rank = attemptRank(rec.attempt);
+      var existing = mainMap[key];
+      if(!existing){
+        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: false};
+        return;
+      }
+      if(rank > existing.rank || (rank === existing.rank && existing.mark === '' && mark !== '')){
+        mainMap[key] = {mmuid: rec.mmuid, forename: rec.forename, surname: rec.surname, mark: mark, rank: rank, dup: existing.dup};
+      } else if(rank === existing.rank && mark !== '' && existing.mark !== '' && String(mark) !== String(existing.mark)){
+        existing.dup = true;
+      }
+    });
+
+    var keys = {};
+    Object.keys(mainMap).forEach(function(k){keys[k]=true;});
+    Object.keys(extMap).forEach(function(k){keys[k]=true;});
+
+    var results = [];
+    Object.keys(keys).forEach(function(key){
+      var m = mainMap[key], x = extMap[key];
+      var status, diff = '';
+      if(m && x){
+        var mn = parseFloat(m.mark), xn = parseFloat(x.mark);
+        if(!isNaN(mn) && !isNaN(xn)){
+          diff = +(mn - xn).toFixed(2);
+          status = Math.abs(diff) <= tolerance ? 'match' : 'mismatch';
+        } else {
+          status = (String(m.mark).trim().toLowerCase() === String(x.mark).trim().toLowerCase()) ? 'match' : 'mismatch';
+        }
+      } else if(m && !x){
+        status = 'missingres';
+      } else {
+        status = 'missingcw';
+      }
+      results.push({
+        mmuid: m ? m.mmuid : normalizeId(x.rawId),
+        forename: m ? m.forename : '',
+        surname: m ? m.surname : '',
+        resName: x ? x.name : '',
+        cwMark: m ? m.mark : '',
+        resMark: x ? x.mark : '',
+        cwDup: m ? m.dup : false,
+        dup: x ? x.dup : false,
+        diff: diff,
+        status: status
+      });
+    });
+
+    var order = {mismatch:0, missingres:1, missingcw:2, match:3};
+    results.sort(function(a,b){
+      if(order[a.status] !== order[b.status]) return order[a.status]-order[b.status];
+      return String(a.surname).localeCompare(String(b.surname));
+    });
+
+    lastCrossCheckRows = results;
+    renderCrossCheck(results);
+  }
+
+  var statusLabel = {match:'Match', mismatch:'Mismatch', missingres:'Missing in results file', missingcw:'Missing in Checking Window'};
+
+  // shared between the on-screen table and the CSV export so exported rows carry the same
+  // duplicate-data warnings a person reviewing on screen would see
+  function cwMarkText(r){ return r.cwMark + (r.cwDup ? ' (conflicting duplicate rows in Checking Window)' : ''); }
+  function resMarkText(r){ return r.resMark + (r.dup ? ' (dup in results file)' : ''); }
+
+  // A very low proportion of the Checking Window roster showing up in the results file usually means
+  // the wrong column, unit, sheet, or file was picked — not that most students genuinely have no result.
+  function renderMatchRateWarning(counts){
+    var cwTotal = counts.match + counts.mismatch + counts.missingres; // students found on the CW side
+    if(cwTotal < 5){ ccMatchWarning.style.display = 'none'; return; }
+    var foundInResults = counts.match + counts.mismatch;
+    var rate = foundInResults / cwTotal;
+    if(rate === 0){
+      ccMatchWarning.textContent = 'None of the ' + cwTotal + ' students in this unit were found in the results file. Double-check the MMU ID column, the unit/sheet selection, and that this is the right results file for this unit.';
+      ccMatchWarning.className = 'severe';
+      ccMatchWarning.style.display = 'block';
+    } else if(rate < 0.3){
+      ccMatchWarning.textContent = 'Only ' + Math.round(rate*100) + '% of this unit\'s ' + cwTotal + ' students were found in the results file (' + foundInResults + ' matched). If that seems low, check the column mapping and unit selection above.';
+      ccMatchWarning.className = '';
+      ccMatchWarning.style.display = 'block';
+    } else {
+      ccMatchWarning.style.display = 'none';
+    }
+  }
+
+  function renderCrossCheck(results){
+    var counts = {match:0, mismatch:0, missingres:0, missingcw:0};
+    results.forEach(function(r){ counts[r.status]++; });
+    document.getElementById('ccMatched').textContent = counts.match;
+    document.getElementById('ccMismatched').textContent = counts.mismatch;
+    document.getElementById('ccMissingRes').textContent = counts.missingres;
+    document.getElementById('ccMissingCw').textContent = counts.missingcw;
+    ccSummary.style.display = 'flex';
+    renderMatchRateWarning(counts);
+
+    ccBodyRows.innerHTML = '';
+    var frag = document.createDocumentFragment();
+    results.forEach(function(r){
+      var tr = document.createElement('tr');
+      function td(txt, cls){ var d=document.createElement('td'); if(cls) d.className=cls; d.textContent = (txt===''||txt==null)?'—':txt; return d; }
+      tr.appendChild(td(r.surname,'name'));
+      tr.appendChild(td(r.forename));
+      tr.appendChild(td(r.mmuid));
+      tr.appendChild(td(r.resName));
+      tr.appendChild(td(r.cwMark==='' ? '' : cwMarkText(r)));
+      tr.appendChild(td(r.resMark==='' ? '' : resMarkText(r)));
+      tr.appendChild(td(r.diff));
+      var statTd = document.createElement('td');
+      var badge = document.createElement('span');
+      badge.className = 'badge ' + r.status;
+      badge.textContent = statusLabel[r.status];
+      statTd.appendChild(badge);
+      tr.appendChild(statTd);
+      frag.appendChild(tr);
+    });
+    ccBodyRows.appendChild(frag);
+    ccTableWrap.style.display = results.length ? 'block' : 'none';
+  }
+
+  document.getElementById('ccExportBtn').addEventListener('click', function(){
+    if(!lastCrossCheckRows.length) return;
+    var head = ['Surname','Forename','MMU ID','Results File Name','Checking Window Mark','Results File Mark','Diff','Status'];
+    var lines = [head.map(csvEscape).join(',')];
+    lastCrossCheckRows.forEach(function(r){
+      var cwMark = r.cwMark==='' ? '' : cwMarkText(r);
+      var resMark = r.resMark==='' ? '' : resMarkText(r);
+      lines.push([r.surname,r.forename,r.mmuid,r.resName,cwMark,resMark,r.diff,statusLabel[r.status]].map(csvEscape).join(','));
+    });
+    var blob = new Blob([lines.join('\r\n')], {type:'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'cross-check-export.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+})();
+</script>
+</body>
+</html>
